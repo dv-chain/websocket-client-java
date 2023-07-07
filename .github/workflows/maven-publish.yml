@@ -18,6 +18,12 @@ jobs:
         distribution: 'adopt'
     - name: Build with Maven
       run: mvn -B package --file pom.xml
+    - name: Create Tag
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git tag v${{ github.run_number }}
+        git push origin v${{ github.run_number }}
     - name: Publish to GitHub Releases
       uses: softprops/action-gh-release@v1
       with:

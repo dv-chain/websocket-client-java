@@ -15,8 +15,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import co.dvchain.trade.clientmessages.Clientmessages.ClientMessage;
 import co.dvchain.trade.clientmessages.Clientmessages.CreateOrderMessage;
+import co.dvchain.trade.clientmessages.Clientmessages.LimitsResponse;
 import co.dvchain.trade.clientmessages.Clientmessages.OrderSide;
 import co.dvchain.trade.clientmessages.Clientmessages.OrderType;
+import co.dvchain.trade.clientmessages.Clientmessages.StatusMessage;
 import co.dvchain.trade.clientmessages.Clientmessages.TradeStatusResponse;
 import co.dvchain.trade.clientmessages.Clientmessages.Types;
 import java.util.logging.Logger;
@@ -35,7 +37,7 @@ public class WebsocketClient {
     private boolean isConnected;
     private WebsocketListener listener;
 
-    private final ConcurrentHashMap<String, CompletableFuture<TradeStatusResponse>> responseFutures = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CompletableFuture<? extends Object>> responseFutures = new ConcurrentHashMap<>();
 
     private ArrayList<String> levelSubscriptions = new ArrayList<String>();
     private ArrayList<String> priceSubscriptions = new ArrayList<String>();;
@@ -152,7 +154,7 @@ public class WebsocketClient {
                     } else if (message.getType() == Types.requestresponse) {
                         System.out.println("Received response for request id: " + message);
                         String requestId = message.getEvent();
-                        CompletableFuture<TradeStatusResponse> future = responseFutures.get(requestId);
+                        CompletableFuture<?> future = responseFutures.get(requestId);
                         if (future != null) {
                             if (message.hasErrorMessage()) {
                                 future.completeExceptionally(new Exception(message.getErrorMessage().getMessage()));
@@ -164,10 +166,19 @@ public class WebsocketClient {
                             }
                             switch(message.getTopic()) {
                                 case "createorder":
-                                    future.complete(message.getTradeStatusResponse());
+                                    completeResponse(future, message.getTradeStatusResponse());
                                     break;
+                                case "limits":
+                                    completeResponse(future, message.getLimitResponse());
+                                    break;
+                                default:
+                                    if (message.getTopic().startsWith("cancelorder/")) {
+                                        completeResponse(future, message.getTradeStatusResponse());
+                                    } else {
+                                        future.completeExceptionally(new Exception("invalid response received for request id: " + requestId));
+                                    }
                             }
-                            future.completeExceptionally(new Exception("invalid response received for request id: " + requestId));
+                            responseFutures.remove(requestId);
                         }
                     }
                 } catch (Exception e) {
@@ -322,6 +333,53 @@ public class WebsocketClient {
             future.completeExceptionally(new Exception("Connection not available"));
         }
         return future;
+    }
+
+    public CompletableFuture<LimitsResponse> getLimits() {
+        UUID uuid = UUID.randomUUID();
+        CompletableFuture<LimitsResponse> future = new CompletableFuture<>();
+        responseFutures.put(uuid.toString(), future);
+        if (webSocket != null && isConnected) {
+            ClientMessage orderMessage = ClientMessage.newBuilder()
+                    .setType(Types.requestresponse)
+                    .setEvent(uuid.toString())
+                    .setTopic("limits")
+                    .build();
+
+            byte[] message = orderMessage.toByteArray();
+            ByteString socketMessage = new ByteString(message);
+            logger.info("send limits: ");
+            webSocket.send(socketMessage);
+        } else {
+            future.completeExceptionally(new Exception("Connection not available"));
+        }
+        return future;
+    }
+
+    public CompletableFuture<TradeStatusResponse> cancelOrder(String orderId) {
+        UUID uuid = UUID.randomUUID();
+        CompletableFuture<TradeStatusResponse> future = new CompletableFuture<>();
+        responseFutures.put(uuid.toString(), future);
+        if (webSocket != null && isConnected) {
+            ClientMessage cancelMessage = ClientMessage.newBuilder()
+                    .setType(Types.requestresponse)
+                    .setEvent(uuid.toString())
+                    .setTopic("cancelorder/" + orderId)
+                    .build();
+
+            byte[] message = cancelMessage.toByteArray();
+            ByteString socketMessage = new ByteString(message);
+            logger.info("Sending cancel order request for order: " + orderId);
+            webSocket.send(socketMessage);
+        } else {
+            future.completeExceptionally(new Exception("Connection not available"));
+        }
+        return future;
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> void completeResponse(CompletableFuture<?> future, T response) {
+        ((CompletableFuture<T>) future).complete(response);
     }
 
     public void setClient(OkHttpClient client) {

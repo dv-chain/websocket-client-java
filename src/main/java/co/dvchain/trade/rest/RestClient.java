@@ -10,6 +10,7 @@ import java.io.IOException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import co.dvchain.trade.rest.model.PositionsResponse;
 import co.dvchain.trade.rest.model.AuthResponse;
+import co.dvchain.trade.rest.model.TradesResponse;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 
@@ -57,11 +58,19 @@ public class RestClient {
 
                 Response response = client.newCall(request).execute();
                 if (!response.isSuccessful()) {
-                    String responseBody = response.body().string();
-                    throw new IOException("Authentication failed: " + response.code() + " - " + response.message() + "\n" + responseBody);
+                    String responseBodyString;
+                    if (response.body() != null) {
+                        responseBodyString = response.body().string();
+                        response.body().close();
+                    } else {
+                        responseBodyString = "Response body was null";
+                    }
+                    throw new IOException("Authentication failed: " + response.code() + " - " + response.message() + "\n" + responseBodyString);
                 }
 
-                AuthResponse authResponse = objectMapper.readValue(response.body().string(), AuthResponse.class);
+                String responseBody = response.body().string();
+                response.body().close();
+                AuthResponse authResponse = objectMapper.readValue(responseBody, AuthResponse.class);
                 currentToken = authResponse.getToken();
                 tokenExpiryTime = Instant.now().plusSeconds(86400 - 60).toEpochMilli();
                 logger.info("Authentication token refreshed. Valid until: " + Instant.ofEpochMilli(tokenExpiryTime));
@@ -82,9 +91,18 @@ public class RestClient {
 
     private <T> T parseResponse(Response response, Class<T> responseType) throws IOException {
         if (!response.isSuccessful()) {
-            throw new IOException("Unexpected response code: " + response.code() + " - " + response.message());
+            String responseBodyString;
+            if (response.body() != null) {
+                responseBodyString = response.body().string();
+                response.body().close();
+            } else {
+                responseBodyString = "Response body was null";
+            }
+            throw new IOException("Unexpected response code: " + response.code() + " - " + response.message() + "\n" + responseBodyString);
         }
-        return objectMapper.readValue(response.body().string(), responseType);
+        String responseBody = response.body().string();
+        response.body().close();
+        return objectMapper.readValue(responseBody, responseType);
     }
 
     public Response get(String endpoint) throws IOException {
@@ -122,5 +140,31 @@ public class RestClient {
     public PositionsResponse getPositions() throws IOException {
         Response response = get("/api/v4/balances");
         return parseResponse(response, PositionsResponse.class);
+    }
+
+    public TradesResponse getTrades(Long afterTimestamp, String status) throws IOException {
+        StringBuilder endpoint = new StringBuilder("/api/v4/trades");
+        boolean hasParams = false;
+        
+        if (afterTimestamp != null) {
+            endpoint.append("?after=").append(afterTimestamp);
+            hasParams = true;
+        }
+        
+        if (status != null) {
+            endpoint.append(hasParams ? "&" : "?").append("status=").append(status);
+            hasParams = true;
+        }
+
+        endpoint.append(hasParams ? "&" : "?").append("timetype=filled");
+        
+        Response response = get(endpoint.toString());
+        try {
+            return parseResponse(response, TradesResponse.class);
+        } finally {
+            if (response.body() != null) {
+                response.body().close();
+            }
+        }
     }
 }

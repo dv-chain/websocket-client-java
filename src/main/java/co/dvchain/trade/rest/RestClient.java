@@ -167,4 +167,32 @@ public class RestClient {
             }
         }
     }
+
+    public TradesResponse getOpenOrders(Long afterTimestamp, String status) throws IOException {
+        StringBuilder endpoint = new StringBuilder("/api/v4/trades");
+        boolean hasParams = false;
+        
+        if (afterTimestamp != null) {
+            endpoint.append("?after=").append(afterTimestamp);
+            hasParams = true;
+        }
+        
+        if (status != null) {
+            endpoint.append(hasParams ? "&" : "?").append("status=").append(status);
+            hasParams = true;
+        }
+
+        endpoint.append(hasParams ? "&" : "?").append("timetype=created");
+        
+        Response response = get(endpoint.toString());
+        try {
+            return parseResponse(response, TradesResponse.class);
+        } finally {
+            if (response.body() != null) {
+                response.body().close();
+            }
+        }
+    }
+
+    
 }
